@@ -1,1 +1,104 @@
+pip install transformers torch pandas numpy scikit-learn openpyxl language-tool-python seaborn tqdm matplotlib
+
+import os
+import re
+import torch
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from tqdm.auto import tqdm
+from sklearn.metrics.pairwise import cosine_similarity
+from transformers import AutoTokenizer, AutoModel
+
+MODEL_NAME = "thenlper/gte-base"
+EMBEDDING_BATCH_SIZE = 16
+EMBEDDINGS_PATH = "embeddings.npy"
+DATA_PATH = r"C:\Users\renji\OneDrive\Desktop\Mine\Job hunt\Renjini Mohanram-Axion Ray Round 2 Assignment\Task 1\Tagged_Dataset_AxionRay.xlsx"
+df = pd.read_excel(DATA_PATH)
+print(f"Loaded {len(df)} rows and {df.shape[1]} columns.")
+
+
+# Clean column names
+df.columns = df.columns.str.strip().str.lower()
+
+# Replace NaNs with 'NA'
+df.fillna("NA", inplace=True)
+
+# Combine all textual columns
+text_cols = [col for col in df.columns if col not in ["order date", "product category"]]
+df["combined_text_raw"] = df[text_cols].agg(" ".join, axis=1)
+
+def clean_text(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^\w\s]", " ", text)  # remove special characters
+    text = re.sub(r"\s+", " ", text).strip()  # collapse whitespace
+    return text
+
+tqdm.pandas(desc="Cleaning text")
+df["cleaned_text"] = df["combined_text_raw"].progress_apply(clean_text)
+
+print("Counts of 'NA' in each column:")
+print((df == "NA").sum())
+
+print("\nNull counts in each column:")
+print(df.isna().sum())
+
+df["text_length"] = df["cleaned_text"].str.len()
+
+# Plot histogram of text lengths
+plt.figure(figsize=(10, 4))
+sns.histplot(df["text_length"], bins=40, color="cornflowerblue")
+plt.title("Distribution of Text Lengths")
+plt.xlabel("Length")
+plt.ylabel("Count")
+plt.show()
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModel.from_pretrained(MODEL_NAME).to(device)
+
+print(f"Model loaded on {device}")
+
+def embed_texts(texts: list[str]) -> np.ndarray:
+    inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt").to(device)
+    with torch.no_grad():
+        outputs = model(**inputs)
+    return outputs.last_hidden_state.mean(dim=1).cpu().numpy()
+
+if os.path.exists(EMBEDDINGS_PATH):
+    embeddings = np.load(EMBEDDINGS_PATH)
+    print("Loaded embeddings from disk.")
+else:
+    embeddings = []
+    for i in tqdm(range(0, len(df), EMBEDDING_BATCH_SIZE), desc="Generating embeddings"):
+        batch = df["cleaned_text"].iloc[i:i+EMBEDDING_BATCH_SIZE].tolist()
+        embs = embed_texts(batch)
+        embeddings.append(embs)
+    embeddings = np.vstack(embeddings)
+    np.save(EMBEDDINGS_PATH, embeddings)
+    print("Saved embeddings to disk.")
+
+df["embedding"] = list(embeddings)
+
+
+def semantic_search(query: str, top_n: int = 3):
+    q_clean = clean_text(query)
+    q_emb = embed_texts([q_clean])
+    sims = cosine_similarity(q_emb, embeddings)[0]
+    idx = np.argsort(sims)[-top_n:][::-1]
+    results = df.iloc[idx].copy()
+    results["similarity"] = sims[idx]
+    return results
+
+query = "Sprays"
+results = semantic_search(query, top_n=3)
+
+for _, row in results.iterrows():
+    print("="*80)
+    print(f"Similarity Score: {row['similarity']:.4f}")
+    print(f"Matched Text: {row['cleaned_text'][:200]}...")
+    print(f"Product Category: {row.get('product category', '')}")
+    print(f"Order Date: {row.get('order date', '')}")
+
 
