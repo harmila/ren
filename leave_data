@@ -1,0 +1,29 @@
+import pandas as pd
+
+# === STEP 1: Configuration ===
+file_path = 'leave_data.xlsx'  # Update this with your file name
+leave_sheets = ['2025', '2024', '2023', '2022']  # Leave data sheets
+
+# === STEP 2: Combine All Leave Sheets ===
+combined_df = pd.DataFrame()
+
+for sheet in leave_sheets:
+    df = pd.read_excel(file_path, sheet_name=sheet)
+    df['Year'] = sheet  # Optional: Keep track of the year
+    combined_df = pd.concat([combined_df, df], ignore_index=True)
+
+# === STEP 3: Clean Data (optional but recommended) ===
+# Ensure 'No of Days' is numeric and fill missing with 0
+combined_df['No of Days'] = pd.to_numeric(combined_df['No of Days'], errors='coerce').fillna(0)
+
+# === STEP 4: Group by Leave Type and Emp ID ===
+agg_df = combined_df.groupby(['Leave Type', 'Emp ID Encrypted']).agg(
+    Leave_Applications=('Emp ID Encrypted', 'count'),  # Number of rows = applications
+    Total_Leave_Days=('No of Days', 'sum')             # Total days taken
+).reset_index()
+
+# === STEP 5: Save to New Sheet ===
+with pd.ExcelWriter(file_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+    agg_df.to_excel(writer, sheet_name='Leave_Counts_By_Emp', index=False)
+
+print("✅ Aggregated leave count and days saved to 'Leave_Counts_By_Emp' sheet.")
